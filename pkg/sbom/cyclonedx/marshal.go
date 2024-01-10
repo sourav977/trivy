@@ -1,6 +1,7 @@
 package cyclonedx
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -57,14 +58,14 @@ func NewMarshaler(version string) *Marshaler {
 }
 
 // Marshal converts the Trivy report to the CycloneDX format
-func (e *Marshaler) Marshal(report types.Report) (*cdx.BOM, error) {
+func (e *Marshaler) Marshal(ctx context.Context, report types.Report) (*cdx.BOM, error) {
 	// Convert
 	root, err := e.MarshalReport(report)
 	if err != nil {
 		return nil, xerrors.Errorf("failed to marshal report: %w", err)
 	}
 
-	return e.core.Marshal(root), nil
+	return e.core.Marshal(ctx, root), nil
 }
 
 func (e *Marshaler) MarshalReport(r types.Report) (*core.Component, error) {
@@ -236,7 +237,7 @@ func (e *Marshaler) rootComponent(r types.Report) (*core.Component, error) {
 			Value: r.Metadata.ImageID,
 		})
 
-		p, err := purl.NewPackageURL(purl.TypeOCI, r.Metadata, ftypes.Package{})
+		p, err := purl.New(purl.TypeOCI, r.Metadata, ftypes.Package{})
 		if err != nil {
 			return nil, xerrors.Errorf("failed to new package url for oci: %w", err)
 		}
@@ -315,17 +316,12 @@ func (e *Marshaler) resultComponent(r types.Result, osFound *ftypes.OS) *core.Co
 }
 
 func pkgComponent(pkg Package) (*core.Component, error) {
-	pu, err := purl.NewPackageURL(pkg.Type, pkg.Metadata, pkg.Package)
-	if err != nil {
-		return nil, xerrors.Errorf("failed to new package purl: %w", err)
-	}
-
 	name := pkg.Name
 	version := pkg.Version
 	var group string
 	// there are cases when we can't build purl
 	// e.g. local Go packages
-	if pu != nil {
+	if pu := pkg.Identifier.PURL; pu != nil {
 		version = pu.Version
 		// use `group` field for GroupID and `name` for ArtifactID for jar files
 		if pkg.Type == ftypes.Jar {
@@ -382,7 +378,7 @@ func pkgComponent(pkg Package) (*core.Component, error) {
 		Name:            name,
 		Group:           group,
 		Version:         version,
-		PackageURL:      pu,
+		PackageURL:      purl.WithPath(pkg.Identifier.PURL, pkg.FilePath),
 		Supplier:        pkg.Maintainer,
 		Licenses:        pkg.Licenses,
 		Hashes:          lo.Ternary(pkg.Digest == "", nil, []digest.Digest{pkg.Digest}),

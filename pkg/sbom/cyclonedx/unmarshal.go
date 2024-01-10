@@ -350,12 +350,8 @@ func toPackage(component cdx.Component) (*purl.PackageURL, *ftypes.Package, erro
 	pkg := p.Package()
 	// Trivy's marshall loses case-sensitivity in PURL used in SBOM for packages (Go, Npm, PyPI),
 	// so we have to use an original package name
-	pkg.Name = getPackageName(p.Type, pkg.Name, component)
-	pkg.Ref = component.BOMRef
-
-	for _, license := range lo.FromPtr(component.Licenses) {
-		pkg.Licenses = append(pkg.Licenses, license.Expression)
-	}
+	pkg.Name = packageName(p.Type, pkg.Name, component)
+	pkg.Licenses = parsePackageLicenses(component.Licenses)
 
 	for key, value := range core.UnmarshalProperties(component.Properties) {
 		switch key {
@@ -383,23 +379,32 @@ func toPackage(component cdx.Component) (*purl.PackageURL, *ftypes.Package, erro
 		}
 	}
 
+	if pkg.FilePath != "" {
+		p.FilePath = pkg.FilePath
+	}
+	pkg.Identifier.BOMRef = component.BOMRef
+
 	if p.Class() == types.ClassOSPkg {
-		// Fill source package information for components in third-party SBOMs .
-		if pkg.SrcName == "" {
-			pkg.SrcName = pkg.Name
-		}
-		if pkg.SrcVersion == "" {
-			pkg.SrcVersion = pkg.Version
-		}
-		if pkg.SrcRelease == "" {
-			pkg.SrcRelease = pkg.Release
-		}
-		if pkg.SrcEpoch == 0 {
-			pkg.SrcEpoch = pkg.Epoch
-		}
+		fillSrcPkg(pkg)
 	}
 
 	return p, pkg, nil
+}
+
+func fillSrcPkg(pkg *ftypes.Package) {
+	// Fill source package information for components in third-party SBOMs .
+	if pkg.SrcName == "" {
+		pkg.SrcName = pkg.Name
+	}
+	if pkg.SrcVersion == "" {
+		pkg.SrcVersion = pkg.Version
+	}
+	if pkg.SrcRelease == "" {
+		pkg.SrcRelease = pkg.Release
+	}
+	if pkg.SrcEpoch == 0 {
+		pkg.SrcEpoch = pkg.Epoch
+	}
 }
 
 func toTrivyCdxComponent(component cdx.Component) ftypes.Component {
@@ -413,7 +418,7 @@ func toTrivyCdxComponent(component cdx.Component) ftypes.Component {
 	}
 }
 
-func getPackageName(typ, pkgNameFromPurl string, component cdx.Component) string {
+func packageName(typ, pkgNameFromPurl string, component cdx.Component) string {
 	if typ == packageurl.TypeMaven {
 		// Jar uses `Group` field for `GroupID`
 		if component.Group != "" {
@@ -424,4 +429,31 @@ func getPackageName(typ, pkgNameFromPurl string, component cdx.Component) string
 		}
 	}
 	return component.Name
+}
+
+// parsePackageLicenses checks all supported license fields and returns a list of licenses.
+// https://cyclonedx.org/docs/1.5/json/#components_items_licenses
+func parsePackageLicenses(l *cdx.Licenses) []string {
+	var licenses []string
+	for _, license := range lo.FromPtr(l) {
+		if license.License != nil {
+			// Trivy uses `Name` field to marshal licenses
+			if license.License.Name != "" {
+				licenses = append(licenses, license.License.Name)
+				continue
+			}
+
+			if license.License.ID != "" {
+				licenses = append(licenses, license.License.ID)
+				continue
+			}
+		}
+
+		if license.Expression != "" {
+			licenses = append(licenses, license.Expression)
+			continue
+		}
+
+	}
+	return licenses
 }
